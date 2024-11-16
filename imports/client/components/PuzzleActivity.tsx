@@ -1,5 +1,5 @@
 import { Meteor } from "meteor/meteor";
-import { useTracker } from "meteor/react-meteor-data";
+import { useSubscribe, useTracker } from "meteor/react-meteor-data";
 import { faCommentDots } from "@fortawesome/free-solid-svg-icons/faCommentDots";
 import { faDoorOpen } from "@fortawesome/free-solid-svg-icons/faDoorOpen";
 import { faFilePen } from "@fortawesome/free-solid-svg-icons/faFilePen";
@@ -16,10 +16,16 @@ import {
   ACTIVITY_GRANULARITY,
   ACTIVITY_SEGMENTS,
 } from "../../lib/config/activityTracking";
+import type { DiscordAccountType } from "../../lib/models/DiscordAccount";
+import MeteorUsers from "../../lib/models/MeteorUsers";
+import Peers from "../../lib/models/mediasoup/Peers";
 import relativeTimeFormat from "../../lib/relativeTimeFormat";
 import roundedTime from "../../lib/roundedTime";
 import ActivityBuckets from "../ActivityBuckets";
+import useSubscribeAvatars from "../hooks/useSubscribeAvatars";
+import { Subscribers } from "../subscribers";
 import RelativeTime from "./RelativeTime";
+import { PeopleListDiv } from "./styling/PeopleComponents";
 import { mediaBreakpointDown } from "./styling/responsive";
 
 const PuzzleActivityItems = styled.span`
@@ -88,6 +94,13 @@ interface PuzzleActivityProps {
   huntId: string;
   puzzleId: string;
   unlockTime: Date;
+}
+
+interface ViewerSubscriber {
+  user: string;
+  name: string | undefined;
+  discordAccount: DiscordAccountType | undefined;
+  tab: string | undefined;
 }
 
 const PuzzleActivity = ({
@@ -178,9 +191,102 @@ const PuzzleActivity = ({
     return buckets[buckets.length - 1] ?? 0;
   };
 
+  // add a list of people viewing a puzzle to activity
+  const subscriberTopic = `puzzle:${puzzleId}`;
+  const subscribersLoading = useSubscribe("subscribers.fetch", subscriberTopic);
+  const callMembersLoading = useSubscribe(
+    "mediasoup:metadata",
+    huntId,
+    puzzleId,
+  );
+  const avatarsLoading = useSubscribeAvatars(huntId);
+
+  const loading =
+    subscribersLoading() || callMembersLoading() || avatarsLoading();
+
+  const { viewers, rtcViewers } = useTracker(() => {
+    if (loading) {
+      return {
+        unknown: 0,
+        viewers: [] as ViewerSubscriber[],
+        rtcViewers: [] as ViewerSubscriber[],
+        selfPeer: undefined,
+      };
+    }
+
+    let unknownCount = 0;
+    const viewersAcc: ViewerSubscriber[] = [];
+
+    const rtcViewersAcc: ViewerSubscriber[] = [];
+    const rtcViewerIndex: Record<string, boolean> = {};
+
+    const rtcParticipants = Peers.find({
+      hunt: huntId,
+      call: puzzleId,
+    }).fetch();
+    rtcParticipants.forEach((p) => {
+      const user = MeteorUsers.findOne(p.createdBy);
+      if (!user?.displayName) {
+        unknownCount += 1;
+        return;
+      }
+
+      // If the same user is joined twice (from two different tabs), dedupe in
+      // the viewer listing. (We include both in rtcParticipants still.)
+      rtcViewersAcc.push({
+        user: user._id,
+        name: user.displayName,
+        discordAccount: user.discordAccount,
+        tab: p.tab,
+      });
+      rtcViewerIndex[user._id] = true;
+    });
+
+    Subscribers.find({ name: subscriberTopic }).forEach((s) => {
+      if (rtcViewerIndex[s.user]) {
+        // already counted among rtcViewers, don't duplicate
+        return;
+      }
+
+      const user = MeteorUsers.findOne(s.user);
+      if (!user?.displayName) {
+        unknownCount += 1;
+        return;
+      }
+
+      viewersAcc.push({
+        user: s.user,
+        name: user.displayName,
+        discordAccount: user.discordAccount,
+        tab: undefined,
+      });
+    });
+
+    return {
+      unknown: unknownCount,
+      viewers: viewersAcc,
+      rtcViewers: rtcViewersAcc,
+    };
+  }, [loading, subscriberTopic, huntId, puzzleId]);
+
+  const totalViewers = rtcViewers.length + viewers.length;
+
+  const viewerList = rtcViewers.concat(viewers).map((viewer) => viewer.name);
+
   const sparklineTooltip = (
     <Tooltip id={`puzzle-activity-sparkline-${puzzleId}`}>
-      <div>People working on this puzzle:</div>
+      <div>
+        {totalViewers > 0
+          ? "People working on this puzzle"
+          : "Recent activity on this puzzle"}
+        :
+      </div>
+      <div>
+        <PeopleListDiv>{viewerList.join(", ")}</PeopleListDiv>
+        {/* <PeopleListDiv>
+        {.join(', ')}
+        </PeopleListDiv> */}
+      </div>
       <PuzzleActivityDetailTimeRange>
         <div>
           {/* Don't need to use RelativeTime here because this duration doesn't change, even as now
@@ -263,7 +369,9 @@ const PuzzleActivity = ({
               spotColors={{ "-1": "black", 0: "black", 1: "black" }}
             />
           </Sparklines>
-          <span>{displayNumber(totals)}</span>
+          <span>
+            {displayNumber(totals)}/{totalViewers}
+          </span>
         </PuzzleActivitySparkline>
       </OverlayTrigger>
     </PuzzleActivityItems>

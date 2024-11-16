@@ -1,3 +1,6 @@
+import { useSubscribe, useTracker } from "meteor/react-meteor-data";
+import { faEye } from "@fortawesome/free-regular-svg-icons";
+import { faPhone } from "@fortawesome/free-solid-svg-icons";
 import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
 import { faMinus } from "@fortawesome/free-solid-svg-icons/faMinus";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
@@ -15,12 +18,17 @@ import ButtonGroup from "react-bootstrap/esm/ButtonGroup";
 import { Link } from "react-router-dom";
 import styled, { css } from "styled-components";
 import { difference, indexedById } from "../../lib/listUtils";
+import type { DiscordAccountType } from "../../lib/models/DiscordAccount";
+import MeteorUsers from "../../lib/models/MeteorUsers";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import type { TagType } from "../../lib/models/Tags";
+import Peers from "../../lib/models/mediasoup/Peers";
 import type { Solvedness } from "../../lib/solvedness";
 import { computeSolvedness } from "../../lib/solvedness";
 import updatePuzzle from "../../methods/updatePuzzle";
 import { useOperatorActionsHiddenForHunt } from "../hooks/persisted-state";
+import useSubscribeAvatars from "../hooks/useSubscribeAvatars";
+import { Subscribers } from "../subscribers";
 import BookmarkButton from "./BookmarkButton";
 import PuzzleActivity from "./PuzzleActivity";
 import PuzzleAnswer from "./PuzzleAnswer";
@@ -30,6 +38,13 @@ import PuzzleModalForm from "./PuzzleModalForm";
 import TagList from "./TagList";
 import { backgroundColorLookupTable } from "./styling/constants";
 import { mediaBreakpointDown } from "./styling/responsive";
+
+interface ViewerSubscriber {
+  user: string;
+  name: string | undefined;
+  discordAccount: DiscordAccountType | undefined;
+  tab: string | undefined;
+}
 
 const PuzzleDiv = styled.div<{
   $solvedness: Solvedness;
@@ -129,12 +144,26 @@ const TagListColumn = styled(TagList)`
   )}
 `;
 
+const SolversColumn = styled(PuzzleColumn)`
+  padding: 0 2px;
+  display: inline-block;
+  flex: 3;
+  margin: -2px -4px -2px 0;
+  ${mediaBreakpointDown(
+    "xs",
+    css`
+      flex: 0 0 100%;
+    `,
+  )}
+`;
+
 const Puzzle = React.memo(
   ({
     puzzle,
     bookmarked,
     allTags,
     canUpdate,
+    showSolvers,
     suppressTags,
     segmentAnswers,
   }: {
@@ -143,12 +172,97 @@ const Puzzle = React.memo(
     // All tags associated with the hunt.
     allTags: TagType[];
     canUpdate: boolean;
+    showSolvers: boolean;
     suppressTags?: string[];
     segmentAnswers?: boolean;
   }) => {
     const [operatorActionsHidden] = useOperatorActionsHiddenForHunt(
       puzzle.hunt,
     );
+    const puzzleId = puzzle._id;
+    const huntId = puzzle.hunt;
+
+    // add a list of people viewing a puzzle to activity
+    const subscriberTopic = `puzzle:${puzzleId}`;
+    const subscribersLoading = useSubscribe(
+      "subscribers.fetch",
+      subscriberTopic,
+    );
+    const callMembersLoading = useSubscribe(
+      "mediasoup:metadata",
+      huntId,
+      puzzleId,
+    );
+    const avatarsLoading = useSubscribeAvatars(huntId);
+
+    const loading =
+      subscribersLoading() || callMembersLoading() || avatarsLoading();
+
+    const { viewers, rtcViewers } = useTracker(() => {
+      if (loading) {
+        return {
+          unknown: 0,
+          viewers: [] as ViewerSubscriber[],
+          rtcViewers: [] as ViewerSubscriber[],
+          selfPeer: undefined,
+        };
+      }
+
+      let unknownCount = 0;
+      const viewersAcc: ViewerSubscriber[] = [];
+
+      const rtcViewersAcc: ViewerSubscriber[] = [];
+      const rtcViewerIndex: Record<string, boolean> = {};
+
+      const rtcParticipants = Peers.find({
+        hunt: huntId,
+        call: puzzleId,
+      }).fetch();
+      rtcParticipants.forEach((p) => {
+        const user = MeteorUsers.findOne(p.createdBy);
+        if (!user?.displayName) {
+          unknownCount += 1;
+          return;
+        }
+
+        // If the same user is joined twice (from two different tabs), dedupe in
+        // the viewer listing. (We include both in rtcParticipants still.)
+        rtcViewersAcc.push({
+          user: user._id,
+          name: user.displayName,
+          discordAccount: user.discordAccount,
+          tab: p.tab,
+        });
+        rtcViewerIndex[user._id] = true;
+      });
+
+      Subscribers.find({ name: subscriberTopic }).forEach((s) => {
+        if (rtcViewerIndex[s.user]) {
+          // already counted among rtcViewers, don't duplicate
+          return;
+        }
+
+        const user = MeteorUsers.findOne(s.user);
+        if (!user?.displayName) {
+          unknownCount += 1;
+          return;
+        }
+
+        viewersAcc.push({
+          user: s.user,
+          name: user.displayName,
+          discordAccount: user.discordAccount,
+          tab: undefined,
+        });
+      });
+
+      return {
+        unknown: unknownCount,
+        viewers: viewersAcc,
+        rtcViewers: rtcViewersAcc,
+      };
+    }, [loading, subscriberTopic, huntId, puzzleId]);
+
     const showEdit = canUpdate && !operatorActionsHidden;
 
     // Generating the edit modals for all puzzles is expensive, so we do it
@@ -267,6 +381,25 @@ const Puzzle = React.memo(
         <PuzzleTitleColumn>
           <Link to={linkTarget}>{puzzle.title}</Link>
         </PuzzleTitleColumn>
+        <SolversColumn>
+          {showSolvers && solvedness === "unsolved" ? (
+            <div>
+              {rtcViewers.length > 0 ? (
+                <span>
+                  <FontAwesomeIcon icon={faPhone} />{" "}
+                </span>
+              ) : null}
+              {rtcViewers.map((viewer) => viewer.name).join(", ")}
+              {rtcViewers.length > 0 && viewers.length > 0 ? <br /> : null}
+              {viewers.length > 0 ? (
+                <span>
+                  <FontAwesomeIcon icon={faEye} />{" "}
+                </span>
+              ) : null}
+              {viewers.map((viewer) => viewer.name).join(", ")}
+            </div>
+          ) : null}
+        </SolversColumn>
         <PuzzleActivityColumn>
           {solvedness === "unsolved" && (
             <PuzzleActivity

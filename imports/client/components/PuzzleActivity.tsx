@@ -20,6 +20,7 @@ import relativeTimeFormat from "../../lib/relativeTimeFormat";
 import roundedTime from "../../lib/roundedTime";
 import ActivityBuckets from "../ActivityBuckets";
 import RelativeTime from "./RelativeTime";
+import { PeopleListDiv } from "./styling/PeopleComponents";
 import { mediaBreakpointDown } from "./styling/responsive";
 
 const PuzzleActivityItems = styled.span`
@@ -88,12 +89,14 @@ interface PuzzleActivityProps {
   huntId: string;
   puzzleId: string;
   unlockTime: Date;
+  subscribers: Record<string, string[]> | null;
 }
 
 const PuzzleActivity = ({
   huntId,
   puzzleId,
   unlockTime,
+  subscribers,
 }: PuzzleActivityProps) => {
   const [finalBucket, setFinalBucket] = useState(
     roundedTime(ACTIVITY_GRANULARITY),
@@ -178,9 +181,26 @@ const PuzzleActivity = ({
     return buckets[buckets.length - 1] ?? 0;
   };
 
+  const rtcViewers = subscribers?.callers ?? [];
+  const viewers = subscribers?.viewers ?? [];
+  const totalViewers = rtcViewers.length + viewers.length;
+
+  const viewerList = rtcViewers.concat(viewers).map((viewer) => viewer);
+
   const sparklineTooltip = (
     <Tooltip id={`puzzle-activity-sparkline-${puzzleId}`}>
-      <div>People working on this puzzle:</div>
+      <div>
+        {totalViewers > 0
+          ? "People working on this puzzle"
+          : "Recent activity on this puzzle"}
+        :
+      </div>
+      <div>
+        <PeopleListDiv>{viewerList.join(", ")}</PeopleListDiv>
+        {/* <PeopleListDiv>
+        {.join(', ')}
+        </PeopleListDiv> */}
+      </div>
       <PuzzleActivityDetailTimeRange>
         <div>
           {/* Don't need to use RelativeTime here because this duration doesn't change, even as now
@@ -263,7 +283,9 @@ const PuzzleActivity = ({
               spotColors={{ "-1": "black", 0: "black", 1: "black" }}
             />
           </Sparklines>
-          <span>{displayNumber(totals)}</span>
+          <span>
+            {displayNumber(totals)}/{totalViewers}
+          </span>
         </PuzzleActivitySparkline>
       </OverlayTrigger>
     </PuzzleActivityItems>

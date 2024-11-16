@@ -8,6 +8,7 @@
 
 import { check, Match } from "meteor/check";
 import { Meteor } from "meteor/meteor";
+import MeteorUsers from "../lib/models/MeteorUsers";
 import { serverId, registerPeriodicCleanupHook } from "./garbage-collection";
 import Subscribers from "./models/Subscribers";
 
@@ -88,7 +89,7 @@ Meteor.publish("subscribers.counts", function (q: Record<string, any>) {
         counters[name]![user] = 0;
       }
 
-      counters[name]![user] += 1;
+      counters[name]![user]! += 1;
       if (initialized) {
         this.changed("subscribers.counts", name, {
           value: Object.keys(counters[name]!).length,
@@ -99,7 +100,7 @@ Meteor.publish("subscribers.counts", function (q: Record<string, any>) {
     removed: (doc) => {
       const { name, user } = doc;
 
-      counters[name]![user] -= 1;
+      counters[name]![user]! -= 1;
       if (counters[name]![user] === 0) {
         delete counters[name]![user];
       }
@@ -143,16 +144,63 @@ Meteor.publish("subscribers.fetch", function (name) {
         this.added("subscribers", `${name}:${user}`, { name, user });
       }
 
-      users[user] += 1;
+      users[user]! += 1;
     },
 
     removed: (doc) => {
       const { user } = doc;
 
-      users[user] -= 1;
+      users[user]! -= 1;
       if (users[user] === 0) {
         delete users[user];
         this.removed("subscribers", `${name}:${user}`);
+      }
+    },
+  });
+  this.onStop(() => handle.stop());
+  this.ready();
+  return undefined;
+});
+
+// this is the unsafe version of the above
+Meteor.publish("subscribers.fetchAll", async function (hunt) {
+  check(hunt, String);
+
+  if (!this.userId) {
+    throw new Meteor.Error(401, "Not logged in");
+  }
+
+  if (!(await MeteorUsers.findOneAsync(this.userId))?.hunts?.includes(hunt)) {
+    throw new Meteor.Error(403, "Not a member of this hunt");
+  }
+
+  const users: Record<string, number> = {};
+
+  const cursor = Subscribers.find({});
+  // const cursor = Subscribers.find({'context.hunt': hunt});
+  const handle = cursor.observe({
+    added: (doc) => {
+      const user = doc.user;
+      const name = doc.name;
+      const key = `${name}:${user}`;
+
+      if (!Object.prototype.hasOwnProperty.call(users, key)) {
+        users[key] = 0;
+        this.added("subscribers", key, { name, user });
+      }
+
+      users[key]! += 1;
+    },
+
+    removed: (doc) => {
+      const user = doc.user;
+      const name = doc.name;
+      const key = `${name}:${user}`;
+
+      users[key]! -= 1;
+      if (users[key] === 0) {
+        delete users[key];
+        this.removed("subscribers", key);
       }
     },
   });

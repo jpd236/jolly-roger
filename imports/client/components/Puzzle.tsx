@@ -1,3 +1,5 @@
+import { faEye } from "@fortawesome/free-regular-svg-icons";
+import { faPhone } from "@fortawesome/free-solid-svg-icons";
 import { faEdit } from "@fortawesome/free-solid-svg-icons/faEdit";
 import { faMinus } from "@fortawesome/free-solid-svg-icons/faMinus";
 import { faPuzzlePiece } from "@fortawesome/free-solid-svg-icons/faPuzzlePiece";
@@ -129,26 +131,47 @@ const TagListColumn = styled(TagList)`
   )}
 `;
 
+const SolversColumn = styled(PuzzleColumn)`
+  padding: 0 2px;
+  display: inline-block;
+  flex: 3;
+  margin: -2px -4px -2px 0;
+  ${mediaBreakpointDown(
+    "xs",
+    css`
+      flex: 0 0 100%;
+    `,
+  )}
+`;
+
 const Puzzle = React.memo(
   ({
     puzzle,
     bookmarked,
     allTags,
     canUpdate,
+    showSolvers,
     suppressTags,
     segmentAnswers,
+    subscribers,
   }: {
     puzzle: PuzzleType;
     bookmarked: boolean;
     // All tags associated with the hunt.
     allTags: TagType[];
     canUpdate: boolean;
+    showSolvers: boolean;
     suppressTags?: string[];
     segmentAnswers?: boolean;
+    subscribers: Record<string, string[]> | null;
   }) => {
     const [operatorActionsHidden] = useOperatorActionsHiddenForHunt(
       puzzle.hunt,
     );
+
+    // add a list of people viewing a puzzle to activity
+    const viewers = (subscribers?.viewers ?? []).filter(Boolean);
+    const rtcViewers = (subscribers?.callers ?? []).filter(Boolean);
     const showEdit = canUpdate && !operatorActionsHidden;
 
     // Generating the edit modals for all puzzles is expensive, so we do it
@@ -267,12 +290,32 @@ const Puzzle = React.memo(
         <PuzzleTitleColumn>
           <Link to={linkTarget}>{puzzle.title}</Link>
         </PuzzleTitleColumn>
+        <SolversColumn>
+          {showSolvers && solvedness === "unsolved" ? (
+            <div>
+              {rtcViewers.length > 0 ? (
+                <span>
+                  <FontAwesomeIcon icon={faPhone} />{" "}
+                </span>
+              ) : null}
+              {rtcViewers.map((viewer) => viewer).join(", ")}
+              {rtcViewers.length > 0 && viewers.length > 0 ? <br /> : null}
+              {viewers.length > 0 ? (
+                <span>
+                  <FontAwesomeIcon icon={faEye} />{" "}
+                </span>
+              ) : null}
+              {viewers.map((viewer) => viewer).join(", ")}
+            </div>
+          ) : null}
+        </SolversColumn>
         <PuzzleActivityColumn>
           {solvedness === "unsolved" && (
             <PuzzleActivity
               huntId={puzzle.hunt}
               puzzleId={puzzle._id}
               unlockTime={puzzle.createdAt}
+              subscribers={subscribers}
             />
           )}
         </PuzzleActivityColumn>

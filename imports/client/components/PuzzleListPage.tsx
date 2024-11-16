@@ -1,5 +1,5 @@
 import { Meteor } from "meteor/meteor";
-import { useTracker } from "meteor/react-meteor-data";
+import { useSubscribe, useTracker } from "meteor/react-meteor-data";
 import { faCaretDown } from "@fortawesome/free-solid-svg-icons/faCaretDown";
 import { faEraser } from "@fortawesome/free-solid-svg-icons/faEraser";
 import { faPlus } from "@fortawesome/free-solid-svg-icons/faPlus";
@@ -26,6 +26,7 @@ import styled, { css } from "styled-components";
 import { sortedBy } from "../../lib/listUtils";
 import Bookmarks from "../../lib/models/Bookmarks";
 import Hunts from "../../lib/models/Hunts";
+import Peers from "../../lib/models/mediasoup/Peers";
 import type { PuzzleType } from "../../lib/models/Puzzles";
 import Puzzles from "../../lib/models/Puzzles";
 import Tags from "../../lib/models/Tags";
@@ -42,10 +43,14 @@ import {
   useHuntPuzzleListCollapseGroups,
   useHuntPuzzleListDisplayMode,
   useHuntPuzzleListShowSolved,
+  useHuntPuzzleListShowSolvers,
   useOperatorActionsHiddenForHunt,
 } from "../hooks/persisted-state";
 import useFocusRefOnFindHotkey from "../hooks/useFocusRefOnFindHotkey";
+import useSubscribeDisplayNames from "../hooks/useSubscribeDisplayNames";
 import useTypedSubscribe from "../hooks/useTypedSubscribe";
+import indexedDisplayNames from "../indexedDisplayNames";
+import { Subscribers } from "../subscribers";
 import HuntNav from "./HuntNav";
 import PuzzleList from "./PuzzleList";
 import type {
@@ -59,7 +64,7 @@ import { mediaBreakpointDown } from "./styling/responsive";
 
 const ViewControls = styled.div<{ $canAdd?: boolean }>`
   display: grid;
-  grid-template-columns: auto auto auto 1fr;
+  grid-template-columns: auto auto auto auto 1fr;
   align-items: end;
   gap: 1em;
   margin-bottom: 1em;
@@ -85,7 +90,7 @@ const ViewControls = styled.div<{ $canAdd?: boolean }>`
 `;
 
 const SearchFormGroup = styled(FormGroup)<{ $canAdd?: boolean }>`
-  grid-column: ${(props) => (props.$canAdd ? 1 : 3)} / -1;
+  grid-column: ${(props) => (props.$canAdd ? 1 : 4)} / -1;
   ${mediaBreakpointDown(
     "sm",
     css`
@@ -199,6 +204,7 @@ const PuzzleListView = ({
   const searchBarRef = useRef<HTMLInputElement>(null);
   const [displayMode, setDisplayMode] = useHuntPuzzleListDisplayMode(huntId);
   const [showSolved, setShowSolved] = useHuntPuzzleListShowSolved(huntId);
+  const [showSolvers, setShowSolvers] = useHuntPuzzleListShowSolvers(huntId);
   const [huntPuzzleListCollapseGroups, setHuntPuzzleListCollapseGroups] =
     useHuntPuzzleListCollapseGroups(huntId);
   const expandAllGroups = useCallback(() => {
@@ -350,11 +356,70 @@ const PuzzleListView = ({
     [setShowSolved],
   );
 
+  const setShowSolversString = useCallback(
+    (value: string) => {
+      setShowSolvers(value === "show");
+    },
+    [setShowSolvers],
+  );
+
   const showAddModal = useCallback(() => {
     if (addModalRef.current) {
       addModalRef.current.show();
     }
   }, []);
+
+  const subscribersLoading = useSubscribe("subscribers.fetchAll", huntId);
+  const callMembersLoading = useSubscribe("mediasoup:metadataAll", huntId);
+
+  const displayNamesLoading = useSubscribeDisplayNames(huntId);
+
+  const subscriptionsLoading =
+    subscribersLoading() || callMembersLoading() || displayNamesLoading();
+
+  const puzzleSubscribers = useTracker(() => {
+    if (subscriptionsLoading) {
+      return { none: { none: [] } };
+    }
+
+    const puzzleSubs: Record<string, Record<string, string[]>> = {};
+    const displayNames = indexedDisplayNames();
+
+    Peers.find({})
+      .fetch()
+      .forEach((s) => {
+        const puzzle = s.call;
+        const user = displayNames.get(s.createdBy);
+        if (!Object.hasOwn(puzzleSubs, puzzle)) {
+          puzzleSubs[puzzle] = {
+            viewers: [],
+            callers: [],
+          };
+        }
+        if (user && !puzzleSubs[puzzle]?.callers?.includes(user)) {
+          puzzleSubs[puzzle]?.callers?.push(user);
+        }
+      });
+
+    Subscribers.find({}).forEach((s) => {
+      const puzzle = s.name.replace(/^puzzle:/, "");
+      const user = displayNames.get(s.user);
+      if (!Object.hasOwn(puzzleSubs, puzzle)) {
+        puzzleSubs[puzzle] = {
+          viewers: [],
+          callers: [],
+        };
+      }
+      if (
+        user &&
+        !puzzleSubs[puzzle]?.callers?.includes(user) &&
+        !puzzleSubs[puzzle]?.viewers?.includes(user)
+      ) {
+        puzzleSubs[puzzle]?.viewers?.push(user);
+      }
+    });
+    return puzzleSubs;
+  }, [subscriptionsLoading]);
 
   const renderList = useCallback(
     (
@@ -362,6 +427,7 @@ const PuzzleListView = ({
       retainedDeletedPuzzles: PuzzleType[] | undefined,
       solvedOverConstrains: boolean,
       allPuzzlesCount: number,
+      puzzleSubs: Record<string, Record<string, string[]>>,
     ) => {
       const maybeMatchWarning = solvedOverConstrains && (
         <Alert variant="info">
@@ -406,6 +472,8 @@ const PuzzleListView = ({
                 canUpdate={canUpdate}
                 suppressedTagIds={suppressedTagIds}
                 trackPersistentExpand={searchString === ""}
+                showSolvers={showSolvers}
+                subscribers={puzzleSubs}
               />
             );
           });
@@ -434,6 +502,8 @@ const PuzzleListView = ({
               bookmarked={bookmarked}
               allTags={allTags}
               canUpdate={canUpdate}
+              subscribers={puzzleSubscribers}
+              showSolvers={showSolvers}
             />
           );
           listControls = null;
@@ -458,6 +528,8 @@ const PuzzleListView = ({
                 allTags={allTags}
                 canUpdate={canUpdate}
                 suppressedTagIds={[]}
+                subscribers={puzzleSubscribers}
+                showSolvers={showSolvers}
               />
             </PuzzleGroupDiv>
           )}
@@ -474,6 +546,8 @@ const PuzzleListView = ({
               canUpdate={canUpdate}
               suppressedTagIds={[]}
               trackPersistentExpand={searchString === ""}
+              subscribers={puzzleSubscribers}
+              showSolvers={showSolvers}
             />
           )}
         </div>
@@ -489,6 +563,8 @@ const PuzzleListView = ({
       canExpandAllGroups,
       expandAllGroups,
       bookmarked,
+      puzzleSubscribers,
+      showSolvers,
     ],
   );
 
@@ -608,6 +684,33 @@ const PuzzleListView = ({
             </StyledToggleButtonGroup>
           </ButtonToolbar>
         </FormGroup>
+        <FormGroup>
+          <FormLabel>Current viewers</FormLabel>
+          <ButtonToolbar>
+            <StyledToggleButtonGroup
+              type="radio"
+              name="show-solvers"
+              defaultValue="show"
+              value={showSolvers ? "show" : "hide"}
+              onChange={setShowSolversString}
+            >
+              <ToggleButton
+                id={`${idPrefix}-solvers-hide-button`}
+                variant="outline-info"
+                value="hide"
+              >
+                Hidden
+              </ToggleButton>
+              <ToggleButton
+                id={`${idPrefix}-solvers-show-button`}
+                variant="outline-info"
+                value="show"
+              >
+                Shown
+              </ToggleButton>
+            </StyledToggleButtonGroup>
+          </ButtonToolbar>
+        </FormGroup>
         {addPuzzleContent}
         <SearchFormGroup
           $canAdd={canAdd}
@@ -634,6 +737,7 @@ const PuzzleListView = ({
         retainedDeletedPuzzles,
         solvedOverConstrains,
         allPuzzles.length,
+        puzzleSubscribers,
       )}
     </div>
   );

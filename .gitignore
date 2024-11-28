@@ -9,3 +9,6 @@ _build
 */build-assets
 */build-chunks
 .rsdoctor
+
+extension/dist
+extension/tmp

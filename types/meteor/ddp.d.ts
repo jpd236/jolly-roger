@@ -10,4 +10,8 @@ declare module "meteor/ddp" {
     const _CurrentMethodInvocation: Meteor.EnvironmentVariable<PartialMethodInvocationOptions>;
     const _CurrentPublicationInvocation: Meteor.EnvironmentVariable<PartialMethodInvocationOptions>;
   }
+
+  namespace DDPServer {
+    const _CurrentWriteFence: Meteor.EnvironmentVariable<unknown>;
+  }
 }

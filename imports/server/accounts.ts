@@ -1,5 +1,6 @@
 import { Accounts } from "meteor/accounts-base";
 import { check, Match } from "meteor/check";
+import { DDPServer } from "meteor/ddp";
 import { Google } from "meteor/google-oauth";
 import { Meteor } from "meteor/meteor";
 import Mustache from "mustache";
@@ -200,11 +201,17 @@ Accounts.validateLoginAttempt((attempt: LoginInfo) => {
 });
 
 Accounts.onLogin(async (info: LoginInfo) => {
-  if (!info.user?._id)
+  const userId = info.user?._id;
+  if (!userId) {
     throw new Meteor.Error(500, "Something has gone horribly wrong");
-  // Capture login time
-  await MeteorUsers.updateAsync(info.user._id, {
-    $set: { lastLogin: new Date() },
+  }
+  // Capture login time outside the login method's write fence so that a
+  // `users` write doesn't force the `login` method's `updated` message to wait
+  // for newly-opened `users` observers to catch up (see meteor/meteor#14872).
+  await DDPServer._CurrentWriteFence.withValue(undefined, async () => {
+    await MeteorUsers.updateAsync(userId, {
+      $set: { lastLogin: new Date() },
+    });
   });
 
   if (info.type === "resume") {
@@ -213,7 +220,7 @@ Accounts.onLogin(async (info: LoginInfo) => {
 
   const summary = {
     ...summaryFromLoginInfo(info),
-    user: info.user._id,
+    user: userId,
     ip: info.connection.clientAddress,
   };
   const { msg, ...logContext } = summary;
